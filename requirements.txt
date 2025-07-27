@@ -3,11 +3,14 @@ streamlit>=1.28.0
 
 # Database
 pandas>=2.0.0
+psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0
 
 # AI/ML
-ollama>=0.1.0
-langchain>=0.1.0
-langchain-community>=0.0.10
+transformers>=4.30.0
+torch>=2.0.0
+tokenizers>=0.13.0
+sentence-transformers>=2.2.0
 
 # Data Visualization
 plotly>=5.15.0
