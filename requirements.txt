@@ -8,7 +8,10 @@ streamlit>=1.47.0
 pandas>=2.3.0
 sqlalchemy>=2.0.40
 
-# AI/ML - Hugging Face Transformers
+# AI/ML - Groq API (replacing Transformers)
+groq>=0.4.1
+
+# AI/ML - Hugging Face Transformers (DEPRECATED - will be removed)
 transformers>=4.54.0
 torch>=2.7.0
 tokenizers>=0.19.0

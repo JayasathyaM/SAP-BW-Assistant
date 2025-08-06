@@ -152,6 +152,26 @@ IMPORTANT RULES:
         # Classify the query
         query_type = self.classify_query(question)
         
+        # Try full prompt first, fallback to compact if too long
+        full_prompt = self._create_full_prompt(question, query_type)
+        
+        # More aggressive token estimation (3 chars ≈ 1 token for safety)
+        estimated_tokens = len(full_prompt) // 3
+        
+        if estimated_tokens > 300:  # Much more conservative limit (was 400)
+            compact_prompt = self._create_compact_prompt(question, query_type)
+            # Double-check compact prompt size
+            compact_tokens = len(compact_prompt) // 3
+            if compact_tokens > 400:
+                # Ultra-compact if still too long
+                return self._create_ultra_compact_prompt(question)
+            return compact_prompt
+        
+        return full_prompt
+    
+    def _create_full_prompt(self, question: str, query_type: EnhancedQueryType) -> str:
+        """Create the full enhanced prompt"""
+        
         # Get relevant examples
         examples = self.get_relevant_examples(query_type, count=3)
         
@@ -189,13 +209,47 @@ IMPORTANT RULES:
             "SQL:"
         ])
         
-        if context:
-            prompt_parts.insert(-3, f"Additional context: {context}")
-            prompt_parts.insert(-3, "")
+        return "\n".join(prompt_parts)
+    
+    def _create_compact_prompt(self, question: str, query_type: EnhancedQueryType) -> str:
+        """Create a compact prompt when token limit is exceeded"""
+        
+        # Get only 1 most relevant example
+        examples = self.get_relevant_examples(query_type, count=1)
+        
+        # Simplified schema
+        compact_schema = """
+SAP BW Tables:
+• VW_LATEST_CHAIN_RUNS: CHAIN_ID, STATUS_OF_PROCESS, CURRENT_DATE, TIME (use rn = 1)
+• VW_CHAIN_SUMMARY: CHAIN_ID, total_runs, success_rate_percent, failed_runs
+• VW_TODAYS_ACTIVITY: CHAIN_ID, STATUS_OF_PROCESS, TIME
+Status values: SUCCESS, FAILED, RUNNING, WAITING
+"""
+        
+        prompt_parts = [
+            "Generate SQLite SQL for SAP BW process chains.",
+            compact_schema,
+            "Example:",
+            f"Q: {examples[0]['question']}" if examples else "Q: Show failed chains",
+            f"SQL: {examples[0]['sql']}" if examples else "SQL: SELECT * FROM VW_LATEST_CHAIN_RUNS WHERE STATUS_OF_PROCESS = 'FAILED' AND rn = 1;",
+            "",
+            f"Q: {question}",
+            "SQL:"
+        ]
         
         return "\n".join(prompt_parts)
 
-    def create_conversational_prompt(self, question: str, chat_history: List[Dict] = None) -> str:
+    def _create_ultra_compact_prompt(self, question: str) -> str:
+        """Create an ultra-compact prompt for extreme token limits"""
+        
+        prompt = f"""SAP BW SQL Generator
+Tables: VW_LATEST_CHAIN_RUNS (CHAIN_ID, STATUS_OF_PROCESS, rn=1), VW_CHAIN_SUMMARY (success_rate_percent)
+Q: {question}
+SQL:"""
+        
+        return prompt
+
+    def create_conversational_prompt(self, question: str, chat_history: Optional[List[Dict]] = None) -> str:
         """Create a prompt that considers conversation context"""
         
         base_prompt = self.create_enhanced_prompt(question)

@@ -336,11 +336,14 @@ class UIEnhancer:
         
         # Add download button
         csv = df.to_csv(index=False)
+        import uuid
+        unique_id = str(uuid.uuid4())[:8]
         st.download_button(
             label="📥 Download CSV",
             data=csv,
             file_name=f"{title.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
+            mime="text/csv",
+            key=f"download_csv_{title.lower().replace(' ', '_')}_{unique_id}"
         )
         
         st.dataframe(df, use_container_width=True)

@@ -63,9 +63,13 @@ class TransformerClient:
         self.pipeline = None
         
         # SAP BW specific configuration
-        self.max_length = 512
+        self.max_length = 2048  # Maximized from 1024 - t5-small can handle up to 2048 tokens
         self.temperature = 0.1
         self.top_p = 0.9
+        
+        # Token monitoring
+        self.max_input_tokens = 1500  # Leave room for generation (2048 - 512 = 1536)
+        self.token_usage_warnings = True
         
     def load_model(self) -> bool:
         """
@@ -154,26 +158,50 @@ class TransformerClient:
             # Create prompt with SAP BW context
             prompt = self._create_sql_prompt(question, context)
             
+            # Monitor token usage
+            if self.token_usage_warnings:
+                tokens = self.tokenizer.encode(prompt, return_tensors='pt')
+                token_count = tokens.shape[1] if tokens.dim() > 1 else len(tokens)
+                
+                if token_count > self.max_input_tokens:
+                    logger.warning(f"Prompt exceeds recommended length: {token_count} > {self.max_input_tokens} tokens")
+                    # Try to create a shorter prompt
+                    prompt = self._create_compact_prompt(question, context)
+                    tokens = self.tokenizer.encode(prompt, return_tensors='pt')
+                    token_count = tokens.shape[1] if tokens.dim() > 1 else len(tokens)
+                    logger.info(f"Using compact prompt: {token_count} tokens")
+                else:
+                    logger.info(f"Prompt token count: {token_count}")
+            
             # Get pad token ID safely
             pad_token_id = getattr(self.tokenizer, 'eos_token_id', None)
             if pad_token_id is None:
                 pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
             
-            # Generate SQL
+            # Generate SQL with maximized length
             result = self.pipeline(
                 prompt,
                 max_length=self.max_length,
+                max_new_tokens=512,  # Limit generation to 512 tokens
                 temperature=self.temperature,
                 top_p=self.top_p,
                 do_sample=True,
-                pad_token_id=pad_token_id
+                pad_token_id=pad_token_id,
+                truncation=True  # Enable truncation as safety
             )
             
             # Extract generated text
             generated_sql = result[0]['generated_text']
             
+            # Add debugging to see what the model actually generated
+            logger.info(f"Raw generated text: '{generated_sql}'")
+            
             # Clean up the generated SQL
             cleaned_sql = self._clean_generated_sql(generated_sql)
+            
+            # Log the cleaning result
+            if cleaned_sql.startswith("SELECT 'Failed to parse"):
+                logger.warning(f"SQL cleaning failed. Raw: '{generated_sql[:200]}' -> Cleaned: '{cleaned_sql}'")
             
             logger.info(f"Generated SQL for question: '{question[:50]}...'")
             return cleaned_sql
@@ -202,34 +230,62 @@ class TransformerClient:
             # Fallback to improved prompt with examples
             pass
         
-        # Compact high-quality prompt (under 400 tokens)
-        prompt = f"""Generate SQLite SQL for SAP BW process chains.
+        # Ultra-compact prompt (under 200 tokens)
+        prompt = f"""Convert to SQL:
 
-SCHEMA:
-• VW_LATEST_CHAIN_RUNS: CHAIN_ID, STATUS_OF_PROCESS, CURRENT_DATE, TIME, rn
-• VW_CHAIN_SUMMARY: CHAIN_ID, success_rate_percent, total_runs
+Tables: VW_LATEST_CHAIN_RUNS (CHAIN_ID, STATUS_OF_PROCESS, rn), VW_CHAIN_SUMMARY (CHAIN_ID, success_rate_percent)
+
+Examples:
+Q: failed chains
+A: SELECT CHAIN_ID FROM VW_LATEST_CHAIN_RUNS WHERE STATUS_OF_PROCESS = 'FAILED' AND rn = 1;
+
+Q: success rates
+A: SELECT CHAIN_ID, success_rate_percent FROM VW_CHAIN_SUMMARY ORDER BY success_rate_percent DESC;
+
+Q: {question}
+A:"""
+        
+        return prompt
+    
+    def _create_compact_prompt(self, question: str, context: Optional[str] = None) -> str:
+        """
+        Create a compact prompt when token limits are exceeded
+        
+        Args:
+            question: User's natural language question
+            context: Database schema context (optional)
+            
+        Returns:
+            Compact formatted prompt string
+        """
+        # Minimal SAP BW schema
+        compact_schema = """
+SAP BW Tables:
+• VW_LATEST_CHAIN_RUNS: CHAIN_ID, STATUS_OF_PROCESS, CURRENT_DATE, TIME (use rn = 1)
+• VW_CHAIN_SUMMARY: CHAIN_ID, total_runs, success_rate_percent, failed_runs
 • VW_TODAYS_ACTIVITY: CHAIN_ID, STATUS_OF_PROCESS, TIME
+Status values: SUCCESS, FAILED, RUNNING, WAITING
+"""
+        
+        # Single example for context
+        example = """
+Example: Q: Show failed chains today
+SQL: SELECT CHAIN_ID, STATUS_OF_PROCESS, CURRENT_DATE, TIME FROM VW_LATEST_CHAIN_RUNS WHERE STATUS_OF_PROCESS = 'FAILED' AND rn = 1;
+"""
+        
+        # Compact prompt
+        prompt = f"""Generate SQLite SQL for SAP BW process chains.
+{compact_schema.strip()}
+{example.strip()}
 
-EXAMPLES:
-Q: Show failed chains
-SQL: SELECT CHAIN_ID, STATUS_OF_PROCESS FROM VW_LATEST_CHAIN_RUNS WHERE STATUS_OF_PROCESS = 'FAILED' AND rn = 1;
-
-Q: Success rates  
-SQL: SELECT CHAIN_ID, success_rate_percent FROM VW_CHAIN_SUMMARY ORDER BY success_rate_percent DESC;
-
-Q: Running count
-SQL: SELECT COUNT(*) as count FROM VW_LATEST_CHAIN_RUNS WHERE STATUS_OF_PROCESS = 'RUNNING' AND rn = 1;
-
-RULES: Use WHERE rn = 1 for latest runs. Use STATUS_OF_PROCESS not STATUS.
-
-Question: {question}
+Q: {question}
 SQL:"""
         
         return prompt
     
     def _clean_generated_sql(self, generated_text: str) -> str:
         """
-        Enhanced SQL cleaning and validation
+        Enhanced SQL cleaning and validation - optimized for T5 model output
         
         Args:
             generated_text: Raw generated text from the model
@@ -240,11 +296,31 @@ SQL:"""
         if not generated_text:
             return "SELECT 'No query generated' as error;"
         
+        # Log the raw input for debugging
+        logger.debug(f"Cleaning raw text: '{generated_text}'")
+        
         # Extract SQL from generated text
         sql = generated_text.strip()
         
-        # Remove common prefixes and artifacts
+        # T5 models often repeat the input, so try to find just the SQL part
+        # Look for patterns that indicate where the SQL starts
+        import re
+        
+        # Strategy 1: Look for "SQL:" followed by the actual query
+        sql_pattern = re.search(r'SQL:\s*(.*)', sql, re.IGNORECASE | re.DOTALL)
+        if sql_pattern:
+            sql = sql_pattern.group(1).strip()
+        
+        # Strategy 2: If T5 repeated the prompt, find the SELECT statement
+        elif 'SELECT' in sql.upper():
+            # Find the last SELECT statement (T5 might repeat it)
+            select_matches = list(re.finditer(r'SELECT\b.*?(?=;|$)', sql, re.IGNORECASE | re.DOTALL))
+            if select_matches:
+                sql = select_matches[-1].group(0).strip()
+        
+        # Strategy 3: Simple prefix removal for T5 artifacts
         prefixes_to_remove = [
+            "translate English to SQL:",
             "SQL Query:",
             "Query:",
             "sql:",
@@ -252,7 +328,8 @@ SQL:"""
             "Answer:",
             "Response:",
             "Generated SQL:",
-            "Result:"
+            "Result:",
+            "Output:"
         ]
         
         for prefix in prefixes_to_remove:
@@ -260,61 +337,43 @@ SQL:"""
                 sql = sql[len(prefix):].strip()
                 break
         
-        # Remove schema descriptions that the model sometimes generates
-        import re
+        # Clean up common T5 artifacts
+        sql = re.sub(r'^["\']|["\']$', '', sql)  # Remove quotes
+        sql = re.sub(r'<[^>]*>', '', sql)  # Remove XML-like tags
+        sql = sql.replace('\n', ' ')  # Single line
+        sql = re.sub(r'\s+', ' ', sql)  # Normalize spaces
+        sql = sql.strip()
         
-        # Remove lines that look like schema descriptions
-        sql_lines = sql.split('\n')
-        clean_lines = []
-        
-        for line in sql_lines:
-            line = line.strip()
-            
-            # Skip lines that are clearly not SQL
-            if (': Process chain' in line or 
-                'RSPCCHAIN:' in line or 
-                'RSPCLOGCHAIN:' in line or
-                line.startswith('-') or
-                'definitions' in line.lower() or
-                'logs' in line.lower() and ':' in line):
-                continue
-            
-            # Keep actual SQL lines
-            if line and (line.upper().startswith(('SELECT', 'FROM', 'WHERE', 'ORDER', 'GROUP', 'HAVING')) or
-                        'SELECT' in line.upper() or
-                        any(col in line.upper() for col in ['CHAIN_ID', 'STATUS_OF_PROCESS', 'COUNT'])):
-                clean_lines.append(line)
-        
-        sql = ' '.join(clean_lines).strip()
-        
-        # If we still don't have valid SQL, try to extract it more aggressively
-        if not sql or len(sql) < 10:
-            # Look for SELECT statements in the original text
-            select_match = re.search(r'SELECT.*?;', generated_text, re.IGNORECASE | re.DOTALL)
-            if select_match:
-                sql = select_match.group(0)
-            else:
-                return "SELECT 'Failed to parse generated query' as error;"
-        
-        # Ensure it starts with SELECT (most common case)
+        # Ensure it starts with SELECT or WITH
         if not sql.upper().startswith(('SELECT', 'WITH')):
             if 'SELECT' in sql.upper():
                 # Find the SELECT and start from there
                 select_idx = sql.upper().find('SELECT')
                 sql = sql[select_idx:]
+            elif any(table in sql.upper() for table in ['VW_LATEST_CHAIN_RUNS', 'VW_CHAIN_SUMMARY', 'VW_TODAYS_ACTIVITY']):
+                # If we have valid table names but no SELECT, add it
+                sql = "SELECT * FROM " + sql
             else:
-                sql = "SELECT " + sql
-        
-        # Clean up multiple spaces and line breaks
-        sql = re.sub(r'\s+', ' ', sql).strip()
+                # Try to create a basic query from the text
+                logger.warning(f"No SELECT found, attempting to construct query from: '{sql}'")
+                if any(word in sql.lower() for word in ['chain', 'status', 'failed']):
+                    return "SELECT CHAIN_ID, STATUS_OF_PROCESS FROM VW_LATEST_CHAIN_RUNS WHERE rn = 1;"
+                else:
+                    return "SELECT 'No valid SQL structure found' as error;"
         
         # Ensure it ends with semicolon
         if not sql.endswith(';'):
             sql += ';'
         
-        # Final validation
+        # Basic validation - must be at least 15 characters and contain SELECT
         if len(sql.strip()) < 15 or 'SELECT' not in sql.upper():
+            logger.warning(f"SQL too short or invalid: '{sql}'")
             return "SELECT 'Invalid query structure generated' as error;"
+        
+        # Basic SQL syntax validation - check for valid tables
+        if not any(table in sql.upper() for table in ['VW_LATEST_CHAIN_RUNS', 'VW_CHAIN_SUMMARY', 'VW_TODAYS_ACTIVITY', 'RSPCCHAIN', 'RSPCLOGCHAIN']):
+            logger.warning(f"No valid SAP BW tables found in: '{sql}'")
+            return "SELECT 'No valid SAP BW tables found in query' as error;"
         
         # Check for dangerous operations
         dangerous_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE']
@@ -323,6 +382,7 @@ SQL:"""
             if keyword in sql_upper:
                 return f"SELECT 'Dangerous operation {keyword} not allowed' as error;"
         
+        logger.debug(f"Cleaned SQL: '{sql}'")
         return sql
     
     def test_model(self) -> Dict[str, Any]:

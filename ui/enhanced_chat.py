@@ -445,9 +445,20 @@ def process_enhanced_query(user_input: str, db_manager, query_processor,
                     
                     # Execute AI-generated SQL
                     try:
-                        df_result = db_manager.execute_query_to_dataframe(sql_query)
-                        ai_success = True
-                        st.success("✅ AI successfully generated and executed query")
+                        # Check if it's an error SQL first
+                        if sql_query.startswith("SELECT 'Failed to parse") or sql_query.startswith("SELECT 'Error:") or sql_query.startswith("SELECT 'No valid") or sql_query.startswith("SELECT 'Invalid") or sql_query.startswith("SELECT 'Dangerous"):
+                            st.warning(f"⚠️ AI generated error SQL: {sql_query}")
+                            ai_success = False
+                        else:
+                            df_result = db_manager.execute_query_to_dataframe(sql_query)
+                            
+                            # Additional check: if the result has an 'error' column, it's likely an error response
+                            if not df_result.empty and 'error' in df_result.columns:
+                                st.warning(f"⚠️ AI generated error result: {df_result.iloc[0]['error'] if len(df_result) > 0 else 'Unknown error'}")
+                                ai_success = False
+                            else:
+                                ai_success = True
+                                st.success("✅ AI successfully generated and executed query")
                     except Exception as sql_error:
                         st.warning(f"⚠️ AI-generated SQL failed: {str(sql_error)[:100]}")
                         ai_success = False
@@ -512,27 +523,54 @@ def get_intelligent_fallback(user_input: str, sap_queries) -> Optional[pd.DataFr
     input_lower = user_input.lower()
     
     try:
-        if any(word in input_lower for word in ['failed', 'failure', 'error']):
+        # Pattern matching for common queries
+        if any(word in input_lower for word in ['failed', 'failure', 'error', 'problem']):
             return sap_queries.get_failed_chains_today()
         
-        elif any(word in input_lower for word in ['success rate', 'performance', 'worst', 'best']):
+        elif any(word in input_lower for word in ['success rate', 'performance', 'worst', 'best', 'statistics', 'stats']):
             perf_data = sap_queries.get_chain_success_rates(20)
             return perf_data
         
-        elif any(word in input_lower for word in ['running', 'active', 'executing']):
+        elif any(word in input_lower for word in ['running', 'active', 'executing', 'in progress']):
             status_data = sap_queries.get_latest_chain_status()
             if not status_data.empty:
                 return status_data[status_data['STATUS_OF_PROCESS'] == 'RUNNING']
         
-        elif any(word in input_lower for word in ['today', 'recent', 'current']):
+        elif any(word in input_lower for word in ['today', 'recent', 'current', 'now']):
             return sap_queries.get_todays_activity()
+        
+        elif any(word in input_lower for word in ['waiting', 'queued', 'scheduled']):
+            status_data = sap_queries.get_latest_chain_status()
+            if not status_data.empty:
+                return status_data[status_data['STATUS_OF_PROCESS'] == 'WAITING']
+        
+        elif any(word in input_lower for word in ['successful', 'completed', 'finished']):
+            status_data = sap_queries.get_latest_chain_status()
+            if not status_data.empty:
+                return status_data[status_data['STATUS_OF_PROCESS'] == 'SUCCESS']
+        
+        elif any(word in input_lower for word in ['status', 'state', 'overview', 'summary']):
+            return sap_queries.get_latest_chain_status()
+        
+        elif any(word in input_lower for word in ['variant', 'most']):
+            # For variant-related queries, get performance data
+            return sap_queries.get_chain_success_rates(20)
         
         else:
             # Default to latest status
             return sap_queries.get_latest_chain_status()
             
-    except Exception:
-        return None
+    except Exception as e:
+        # Log the error and return a basic fallback
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Fallback query failed: {e}")
+        
+        # Try the most basic query possible
+        try:
+            return sap_queries.get_latest_chain_status()
+        except:
+            return None
 
 def display_enhanced_response(enhanced_response: Dict, df_result: pd.DataFrame, sql_query: str):
     """Display the enhanced response with insights and recommendations"""
@@ -559,11 +597,14 @@ def display_enhanced_response(enhanced_response: Dict, df_result: pd.DataFrame, 
         
         # Add download button
         csv = df_result.to_csv(index=False)
+        import uuid
+        unique_id = str(uuid.uuid4())[:8]
         st.download_button(
             label="📥 Download Data (CSV)",
             data=csv,
             file_name=f"sap_bw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
+            mime="text/csv",
+            key=f"download_chat_csv_{unique_id}"
         )
     
     # Recommendations

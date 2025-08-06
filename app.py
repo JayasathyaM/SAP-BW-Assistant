@@ -51,18 +51,20 @@ def initialize_enhanced_components():
         # Initialize SAP BW queries helper
         sap_queries = SAPBWQueries(db_manager)
         
-        # Initialize enhanced AI query processor
-        with st.spinner("🤖 Loading Enhanced AI model... (this may take a few minutes on first run)"):
+        # Initialize Groq AI query processor
+        with st.spinner("🤖 Connecting to Groq API... (initializing Llama3 model)"):
             query_processor = QueryProcessor(
-                model_name=AppConfig.AI_MODEL_NAME,
+                model_name=AppConfig.GROQ_MODEL_NAME,
+                api_key=AppConfig.GROQ_API_KEY,
                 auto_load=False  # We'll load manually to show progress
             )
             
             if not query_processor.initialize():
-                st.warning("⚠️ Enhanced AI model failed to load. Using intelligent fallback mode.")
+                st.warning("⚠️ Groq API connection failed. Using intelligent fallback mode.")
+                st.info("💡 Please check your GROQ_API_KEY environment variable.")
                 return db_manager, None, sap_queries
         
-        st.success("✅ Enhanced AI model loaded successfully!")
+        st.success("✅ Groq API connected successfully! Ready for enhanced SQL generation.")
         return db_manager, query_processor, sap_queries
         
     except Exception as e:
@@ -128,8 +130,8 @@ def main():
     db_manager, query_processor, sap_queries = initialize_enhanced_components()
     
     # Enhanced application header
-    st.markdown('<h1 class="main-header">🚀 SAP BW Process Chain Assistant - Enhanced</h1>', unsafe_allow_html=True)
-    st.markdown("*Intelligent AI-powered assistant with smart suggestions and advanced insights*")
+    st.markdown('<h1 class="main-header">🚀 SAP BW Process Chain Assistant - Groq Powered</h1>', unsafe_allow_html=True)
+    st.markdown("*Advanced AI assistant powered by Groq's Llama3 for superior SQL generation*")
     st.markdown("---")
     
     # Status indicator with enhanced info
@@ -139,14 +141,17 @@ def main():
     
     # Enhanced sidebar with system status and analytics
     with st.sidebar:
-        st.header("🎛️ Enhanced System Status")
+        st.header("🎛️ System Status")
         
         # Component status with enhanced indicators
         db_status = "🟢 Connected" if db_manager else "🔴 Failed"
         st.markdown(f"**Database:** {db_status}")
         
-        ai_status = "🟢 Ready" if query_processor and query_processor.is_ready else "🟡 Fallback Mode"
-        st.markdown(f"**Enhanced AI:** {ai_status}")
+        if query_processor and query_processor.is_ready:
+            ai_status = f"🟢 Groq API Ready ({query_processor.model_name})"
+        else:
+            ai_status = "🟡 Fallback Mode (Groq API unavailable)"
+        st.markdown(f"**AI Engine:** {ai_status}")
         
         st.markdown("---")
         
@@ -197,7 +202,7 @@ def main():
         
         except Exception as e:
             st.warning("Unable to load enhanced stats")
-        
+    
         # Enhanced help section
         st.markdown("---")
         st.header("💡 Enhanced Features")
@@ -253,7 +258,7 @@ def main():
                             with st.expander("💡 Key Insights"):
                                 for insight in enhanced_resp["insights"]:
                                     st.markdown(f"• {insight}")
-                        
+        
                         # Show recommendations
                         if enhanced_resp.get("recommendations"):
                             with st.expander("🎯 Recommendations"):
@@ -408,7 +413,8 @@ def main():
                         label="Download Status CSV",
                         data=csv_data,
                         file_name=f"sap_bw_status_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
+                        mime="text/csv",
+                        key="download_status_csv"
                     )
             
             with export_col2:
@@ -419,7 +425,8 @@ def main():
                             label="Download Performance CSV",
                             data=csv_data,
                             file_name=f"sap_bw_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv"
+                            mime="text/csv",
+                            key="download_performance_csv"
                         )
             
             # Enhanced auto-refresh

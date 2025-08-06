@@ -2,7 +2,7 @@
 SAP BW Query Processor
 
 This module provides the main interface for converting natural language
-questions into SQL queries for SAP BW process chains.
+questions into SQL queries for SAP BW process chains using Groq API.
 """
 
 import sys
@@ -14,8 +14,10 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from llm.transformer_client import TransformerClient
-from llm.prompt_templates import PromptTemplates, QueryType
+from llm.groq_client import GroqClient
+from llm.groq_prompts import GroqPromptEngine, QueryType
+from llm.prompt_templates import PromptTemplates  # Keep for backward compatibility
+from config.settings import AppConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,29 +25,34 @@ logger = logging.getLogger(__name__)
 
 class QueryProcessor:
     """
-    Main processor for converting natural language to SAP BW SQL queries
+    Main processor for converting natural language to SAP BW SQL queries using Groq API
     """
     
     def __init__(self, 
-                 model_name: str = "t5-small",
-                 cache_dir: Optional[str] = None,
+                 model_name: str = "llama3-8b-8192",
+                 api_key: Optional[str] = None,
                  auto_load: bool = True):
         """
-        Initialize the query processor
+        Initialize the query processor with Groq API
         
         Args:
-            model_name: Hugging Face model name to use
-            cache_dir: Directory to cache models
-            auto_load: Whether to automatically load the model
+            model_name: Groq model name to use (default: llama3-8b-8192)
+            api_key: Groq API key (if None, uses environment variable)
+            auto_load: Whether to automatically initialize the client
         """
         self.model_name = model_name
-        self.cache_dir = cache_dir
+        self.api_key = api_key or AppConfig.GROQ_API_KEY
         
-        # Initialize transformer client
-        self.transformer_client = TransformerClient(
-            model_name=model_name,
-            cache_dir=cache_dir
+        # Initialize Groq client
+        self.groq_client = GroqClient(
+            api_key=self.api_key,
+            model=model_name,
+            max_tokens=AppConfig.GROQ_MAX_TOKENS,
+            temperature=AppConfig.GROQ_TEMPERATURE
         )
+        
+        # Initialize prompt engine
+        self.prompt_engine = GroqPromptEngine()
         
         # Track initialization status
         self.is_ready = False
@@ -62,109 +69,119 @@ class QueryProcessor:
     
     def initialize(self) -> bool:
         """
-        Initialize the AI model and pipeline
+        Initialize the Groq client and test connection
         
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            logger.info("Initializing SAP BW Query Processor...")
+            logger.info("Initializing SAP BW Query Processor with Groq API...")
             
-            # Load transformer model
-            if not self.transformer_client.load_model():
-                self.initialization_error = "Failed to load transformer model"
+            # Initialize Groq client
+            if self.groq_client.initialize():
+                self.is_ready = True
+                logger.info("Query processor initialized successfully with Groq")
+                return True
+            else:
+                self.initialization_error = self.groq_client.initialization_error
+                logger.error(f"Failed to initialize Groq client: {self.initialization_error}")
                 return False
-            
-            # Create pipeline
-            if not self.transformer_client.create_pipeline():
-                self.initialization_error = "Failed to create inference pipeline"
-                return False
-            
-            self.is_ready = True
-            logger.info("Query processor initialized successfully")
-            return True
-            
+                
         except Exception as e:
-            self.initialization_error = f"Initialization failed: {e}"
-            logger.error(self.initialization_error)
+            self.initialization_error = str(e)
+            logger.error(f"Query processor initialization failed: {e}")
             return False
-    
+
     def process_question(self, 
                         question: str, 
                         context: Optional[str] = None,
                         validate: bool = True) -> Dict[str, Any]:
         """
-        Process a natural language question and return SQL query with metadata
+        Process natural language question into SQL query using Groq API
         
         Args:
             question: Natural language question about SAP BW process chains
             context: Optional additional context
-            validate: Whether to validate the generated SQL
+            validate: Whether to validate the generated SQL (kept for compatibility)
             
         Returns:
-            Dictionary containing SQL query and processing metadata
+            Dictionary containing:
+            - success: Whether processing succeeded
+            - sql: Generated SQL query
+            - question: Original question
+            - question_type: Classified question type
+            - confidence: Confidence score (estimated)
+            - processing_notes: Any warnings or notes
         """
-        if not self.is_ready:
-            return {
-                "success": False,
-                "error": f"Processor not ready: {self.initialization_error}",
-                "sql": None,
-                "question": question
-            }
+        
+        # Initialize result structure
+        result = {
+            "success": False,
+            "sql": "",
+            "question": question,
+            "question_type": "unknown",
+            "confidence": 0.0,
+            "processing_notes": [],
+            "model_used": "groq",
+            "model_name": self.model_name
+        }
         
         try:
+            if not self.is_ready:
+                raise RuntimeError("Query processor not initialized. Call initialize() first.")
+            
             self.query_count += 1
             
-            # Classify the question type
-            question_type = PromptTemplates.classify_question(question)
+            # Classify the question type using Groq prompt engine
+            question_type = self.prompt_engine.classify_question(question)
+            result["question_type"] = question_type.value
             
-            # Get optimized prompt
-            prompt = PromptTemplates.get_prompt_for_question(question, context)
+            # Generate SQL using Groq API
+            logger.info(f"Processing question with Groq: '{question[:50]}...'")
+            generated_sql = self.groq_client.generate_sql(question, context)
             
-            # Generate SQL using transformer
-            generated_sql = self.transformer_client.generate_sql(question, context)
+            # Check if generation was successful
+            if generated_sql.startswith("SELECT 'Error:") or generated_sql.startswith("SELECT 'No"):
+                result["processing_notes"].append("Groq API generation failed")
+                result["sql"] = generated_sql
+                self.failed_queries += 1
+                return result
             
-            # Validate if requested
-            validation_result = None
-            if validate:
-                validation_result = PromptTemplates.validate_generated_sql(generated_sql, question)
+            # Estimate confidence based on SQL quality
+            confidence = self._estimate_groq_confidence(generated_sql, question)
             
-            # Prepare result
-            result = {
+            # Prepare successful result
+            result.update({
                 "success": True,
                 "sql": generated_sql,
-                "question": question,
-                "question_type": question_type.value,
-                "prompt_used": len(prompt),  # Just the length, not full prompt
-                "validation": validation_result,
-                "confidence": self._estimate_confidence(generated_sql, question),
+                "confidence": confidence,
                 "processing_notes": []
-            }
+            })
             
-            # Add processing notes
-            if validation_result and not validation_result["is_valid"]:
-                result["processing_notes"].append("Generated SQL failed validation")
+            # Add processing notes based on analysis
+            if confidence < 0.7:
+                result["processing_notes"].append("Low confidence in generated SQL")
             
-            if len(generated_sql) < 20:
+            if len(generated_sql) < 30:
                 result["processing_notes"].append("Generated SQL seems very short")
             
             self.successful_queries += 1
-            logger.info(f"Successfully processed question: '{question[:50]}...'")
+            logger.info(f"Successfully processed question with Groq: '{question[:50]}...'")
             
             return result
             
         except Exception as e:
             self.failed_queries += 1
-            error_msg = f"Failed to process question: {e}"
+            error_msg = f"Failed to process question: {str(e)}"
             logger.error(error_msg)
             
-            return {
+            result.update({
                 "success": False,
-                "error": error_msg,
-                "sql": "SELECT 'Error processing question' as error_message;",
-                "question": question,
-                "question_type": "unknown"
-            }
+                "sql": "SELECT 'Error processing question with Groq API' as error;",
+                "processing_notes": [error_msg]
+            })
+            
+            return result
     
     def process_multiple_questions(self, questions: List[str]) -> List[Dict[str, Any]]:
         """
@@ -186,6 +203,50 @@ class QueryProcessor:
     def _estimate_confidence(self, sql: str, question: str) -> float:
         """
         Estimate confidence in the generated SQL
+        
+        Args:
+            sql: Generated SQL query
+            question: Original question
+            
+        Returns:
+            Confidence score between 0.0 and 1.0
+        """
+        confidence = 0.5  # Base confidence
+        
+        # Check SQL structure
+        if sql.upper().startswith('SELECT'):
+            confidence += 0.2
+        
+        # Check for appropriate keywords
+        question_lower = question.lower()
+        sql_upper = sql.upper()
+        
+        if 'status' in question_lower and ('STATUS_OF_PROCESS' in sql_upper or 'VW_LATEST_CHAIN_RUNS' in sql_upper):
+            confidence += 0.2
+        
+        if 'failed' in question_lower and ('FAILED' in sql_upper):
+            confidence += 0.15
+        
+        if 'success rate' in question_lower and ('VW_CHAIN_SUMMARY' in sql_upper):
+            confidence += 0.2
+        
+        # Check for specific chain mentions
+        if any(chain_pattern in question_lower for chain_pattern in ['pc_', 'chain_']) and 'WHERE' in sql_upper:
+            confidence += 0.1
+        
+        # Penalize very short queries
+        if len(sql) < 30:
+            confidence -= 0.2
+        
+        # Penalize queries with errors
+        if 'error' in sql.lower():
+            confidence = 0.1
+        
+        return max(0.0, min(1.0, confidence))
+    
+    def _estimate_groq_confidence(self, sql: str, question: str) -> float:
+        """
+        Estimate confidence in the generated SQL using Groq API
         
         Args:
             sql: Generated SQL query
@@ -306,12 +367,12 @@ class QueryProcessor:
         return test_results
 
 # Convenience functions
-def create_processor(model_name: str = "t5-small") -> QueryProcessor:
+def create_processor(model_name: str = "llama3-8b-8192") -> QueryProcessor:
     """
     Create a QueryProcessor with default settings
     
     Args:
-        model_name: Hugging Face model to use
+        model_name: Groq model to use
         
     Returns:
         Configured QueryProcessor instance
@@ -346,7 +407,7 @@ def main():
     parser = argparse.ArgumentParser(description="SAP BW Query Processor CLI")
     parser.add_argument("--test", action="store_true", help="Run comprehensive tests")
     parser.add_argument("--question", help="Process a specific question")
-    parser.add_argument("--model", default="t5-small", help="Model name to use")
+    parser.add_argument("--model", default="llama3-8b-8192", help="Model name to use")
     parser.add_argument("--examples", action="store_true", help="Show example questions")
     
     args = parser.parse_args()
@@ -382,13 +443,8 @@ def main():
             print(f"Confidence: {result['confidence']:.2f}")
             print(f"Generated SQL:\n{result['sql']}")
             
-            if result.get('validation'):
-                validation = result['validation']
-                print(f"Validation: {'PASSED' if validation['is_valid'] else 'FAILED'}")
-                if validation['warnings']:
-                    print(f"Warnings: {validation['warnings']}")
-                if validation['errors']:
-                    print(f"Errors: {validation['errors']}")
+            if result.get('processing_notes'):
+                print(f"Processing Notes: {result['processing_notes']}")
         else:
             print(f"Error: {result['error']}")
     

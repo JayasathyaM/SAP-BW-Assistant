@@ -33,6 +33,12 @@ class AppConfig:
     AI_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "512"))
     AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.1"))
     
+    # Groq API Configuration
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama3-8b-8192")
+    GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "8192"))
+    GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.1"))
+    
     # Application Settings
     APP_DEBUG = os.getenv("APP_DEBUG", "false").lower() == "true"
     DEBUG = APP_DEBUG  # Alias for backward compatibility
