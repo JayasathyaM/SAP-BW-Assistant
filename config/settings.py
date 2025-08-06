@@ -16,14 +16,16 @@ class AppConfig:
     APP_VERSION = "1.0.0"
     APP_DESCRIPTION = "Local chatbot for SAP BW process chain management"
     
-    # Database Configuration
+    # Database Configuration (SQLite)
+    DATABASE_PATH = os.getenv("DATABASE_PATH", "sap_bw_demo.db")
+    DATABASE_NAME = os.getenv("DATABASE_NAME", "sap_bw_demo")  # For compatibility
+    # Legacy PostgreSQL settings (kept for compatibility)
     DATABASE_HOST = os.getenv("DATABASE_HOST", "localhost")
-    DATABASE_PORT = int(os.getenv("DATABASE_PORT", "5432"))
-    DATABASE_NAME = os.getenv("DATABASE_NAME", "sap_bw_demo")
-    DATABASE_USER = os.getenv("DATABASE_USER", "postgres")
-    DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD", "password")
-    DATABASE_POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "5"))
-    DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "10"))
+    DATABASE_PORT = int(os.getenv("DATABASE_PORT", "0"))
+    DATABASE_USER = os.getenv("DATABASE_USER", "sqlite")
+    DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD", "")
+    DATABASE_POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "1"))
+    DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "0"))
     
     # AI Model Configuration
     AI_MODEL_NAME = os.getenv("AI_MODEL_NAME", "t5-small")
@@ -33,6 +35,7 @@ class AppConfig:
     
     # Application Settings
     APP_DEBUG = os.getenv("APP_DEBUG", "false").lower() == "true"
+    DEBUG = APP_DEBUG  # Alias for backward compatibility
     APP_LOG_LEVEL = os.getenv("APP_LOG_LEVEL", "INFO")
     APP_SESSION_TIMEOUT = int(os.getenv("APP_SESSION_TIMEOUT", "1800"))
     APP_MAX_QUERY_RESULTS = int(os.getenv("APP_MAX_QUERY_RESULTS", "1000"))
@@ -61,8 +64,8 @@ class AppConfig:
     
     @classmethod
     def get_database_url(cls) -> str:
-        """Get PostgreSQL connection URL"""
-        return f"postgresql://{cls.DATABASE_USER}:{cls.DATABASE_PASSWORD}@{cls.DATABASE_HOST}:{cls.DATABASE_PORT}/{cls.DATABASE_NAME}"
+        """Get SQLite connection URL"""
+        return f"sqlite:///{cls.DATABASE_PATH}"
     
     @classmethod
     def is_development(cls) -> bool:

@@ -1,26 +1,31 @@
+# SAP BW Process Chain Chatbot - Production Dependencies
+# Updated with actual working versions as of 2024
+
 # Core Framework
-streamlit>=1.28.0
+streamlit>=1.47.0
 
 # Database
-pandas>=2.0.0
-psycopg2-binary>=2.9.0
-sqlalchemy>=2.0.0
+pandas>=2.3.0
+sqlalchemy>=2.0.40
 
-# AI/ML
-transformers>=4.30.0
-torch>=2.0.0
-tokenizers>=0.13.0
-sentence-transformers>=2.2.0
+# AI/ML - Hugging Face Transformers
+transformers>=4.54.0
+torch>=2.7.0
+tokenizers>=0.19.0
 
 # Data Visualization
-plotly>=5.15.0
-altair>=5.0.0
+plotly>=6.2.0
 
-# Utilities
+# Configuration & Validation
 python-dotenv>=1.0.0
-pydantic>=2.0.0
-typing-extensions>=4.7.0
+pydantic>=2.11.0
 
-# Development
+# Development & Testing
 pytest>=7.4.0
-black>=23.0.0 
+
+# Performance Monitoring
+psutil>=7.0.0
+
+# Optional Dependencies for Enhanced Features
+faker>=37.0.0  # For generating additional demo data
+typing-extensions>=4.7.0  # For enhanced type hints 
