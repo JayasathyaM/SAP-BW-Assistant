@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "password_hash": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+    "role": "admin",
+    "email": "admin@company.com",
+    "created_date": "2025-07-19T12:05:34.091335",
+    "is_active": true,
+    "last_login": "2025-07-19T12:13:52.938410"
+  },
+  "user": {
+    "password_hash": "e606e38b0d8c19b24cf0ee3808183162ea7cd63ff7912dbb22b5e803286b4446",
+    "role": "user",
+    "email": "user@company.com",
+    "created_date": "2025-07-19T12:05:34.091429",
+    "is_active": true,
+    "last_login": null
+  },
+  "Jayasathya ": {
+    "password_hash": "f5f59eca866949947bd3a7cd42d53a18e0796cc893ae79429cce702da7e471d2",
+    "role": "user",
+    "email": "jayasathya29@gmail.com",
+    "created_date": "2025-07-19T12:06:38.785202",
+    "is_active": true,
+    "last_login": null
+  }
+}

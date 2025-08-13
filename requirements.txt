@@ -1,0 +1,9 @@
+# Core Framework
+streamlit>=1.28.0
+pandas>=2.0.0
+
+# Authentication and Security
+hashlib-compat>=1.7.1
+
+# Utilities
+python-dotenv>=1.0.0 
